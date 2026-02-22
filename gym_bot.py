@@ -9,8 +9,8 @@ import os
 
 TOKEN = os.environ["TOKEN"]
 CHAT_ID = int(os.environ["CHAT_ID"])
-POLL_HOUR = 1        # change to your preferred hour
-POLL_MINUTE = 40
+POLL_HOUR = 20        # change to your preferred hour
+POLL_MINUTE = 0
 TIMEZONE = "Asia/Singapore"  
 # ──────────────────────────────────────────────────────
 
