@@ -11,8 +11,8 @@ from telegram.ext import Application, CommandHandler, PollAnswerHandler, Context
 # ─── CONFIG ───────────────────────────────────────────
 TOKEN    = os.environ["TOKEN"]
 CHAT_ID  = int(os.environ["CHAT_ID"])
-POLL_HOUR   = 20
-POLL_MINUTE = 0
+POLL_HOUR   = 23
+POLL_MINUTE = 40
 TIMEZONE = "Asia/Singapore"
 DB_PATH  = os.environ.get("DB_PATH", "./gym_log.db")
 # ──────────────────────────────────────────────────────
