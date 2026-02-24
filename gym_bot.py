@@ -11,8 +11,10 @@ from telegram.ext import Application, CommandHandler, PollAnswerHandler, Context
 # ─── CONFIG ───────────────────────────────────────────
 TOKEN    = os.environ["TOKEN"]
 CHAT_ID  = int(os.environ["CHAT_ID"])
-POLL_HOUR   = 23
-POLL_MINUTE = 40
+POLL_HOUR   = 20
+POLL_MINUTE = 0
+NUDGE_HOUR  = 23
+NUDGE_MINUTE = 0
 TIMEZONE = "Asia/Singapore"
 DB_PATH  = os.environ.get("DB_PATH", "./gym_log.db")
 # ──────────────────────────────────────────────────────
@@ -118,12 +120,93 @@ async def send_weekly_summary(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=CHAT_ID, text=build_weekly_summary())
 
 
+async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tz    = pytz.timezone(TIMEZONE)
+    today = datetime.datetime.now(tz).date()
+
+    # Parse optional day count argument, e.g. /history 7
+    try:
+        days = int(context.args[0]) if context.args else 14
+        days = max(1, min(days, 60))  # clamp between 1 and 60
+    except (ValueError, IndexError):
+        days = 14
+
+    dates = [today - datetime.timedelta(days=i) for i in range(days - 1, -1, -1)]
+    from_date = dates[0].isoformat()
+    to_date   = dates[-1].isoformat()
+
+    con  = sqlite3.connect(DB_PATH)
+    rows = con.execute(
+        "SELECT user_name, date, chose_yes FROM gym_log "
+        "WHERE date >= ? AND date <= ? ORDER BY date, user_name",
+        (from_date, to_date),
+    ).fetchall()
+    # Get known users from this period
+    all_users = sorted({r[0] for r in rows}) if rows else []
+    con.close()
+
+    if not all_users:
+        await update.message.reply_text(f"No data for the last {days} days.")
+        return
+
+    # Build lookup: (user, date) -> chose_yes
+    log: dict[tuple[str, str], int] = {(r[0], r[1]): r[2] for r in rows}
+
+    header = f"📅 Last {days} Days\n{'Date':<12}" + "".join(f"{u:<10}" for u in all_users)
+    lines  = [header, "─" * (12 + 10 * len(all_users))]
+    for d in dates:
+        ds   = d.isoformat()
+        label = d.strftime("%-d %b %a")
+        cells = ""
+        for u in all_users:
+            val = log.get((u, ds))
+            if val is None:
+                cells += f"{'–':<10}"
+            elif val == 1:
+                cells += f"{'✅':<10}"
+            else:
+                cells += f"{'❌':<10}"
+        lines.append(f"{label:<12}{cells}")
+
+    await update.message.reply_text("```\n" + "\n".join(lines) + "\n```", parse_mode="Markdown")
+
+
+async def send_nudge(context: ContextTypes.DEFAULT_TYPE):
+    tz       = pytz.timezone(TIMEZONE)
+    today    = datetime.datetime.now(tz).strftime("%Y-%m-%d")
+
+    con  = sqlite3.connect(DB_PATH)
+    rows = con.execute(
+        "SELECT user_name FROM gym_log WHERE date = ?", (today,)
+    ).fetchall()
+    con.close()
+
+    answered = {r[0] for r in rows}
+
+    # Get all known users from recent history
+    con   = sqlite3.connect(DB_PATH)
+    known = con.execute(
+        "SELECT DISTINCT user_name FROM gym_log ORDER BY timestamp DESC LIMIT 20"
+    ).fetchall()
+    con.close()
+    all_users = {r[0] for r in known}
+
+    missing = all_users - answered
+    if missing:
+        names = ", ".join(sorted(missing))
+        await context.bot.send_message(
+            chat_id=CHAT_ID,
+            text=f"Oi {names}, did you go to the gym today? 👀 Answer the poll!",
+        )
+
+
 def main():
     init_db()
 
     app = Application.builder().token(TOKEN).build()
     app.add_handler(PollAnswerHandler(handle_poll_answer))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("history", history_command))
 
     tz = pytz.timezone(TIMEZONE)
 
@@ -139,6 +222,12 @@ def main():
         send_weekly_summary,
         time=datetime.time(21, 0, 0, tzinfo=tz),
         days=(0,),
+    )
+
+    # Nudge unanswered users at 11:00 PM SGT
+    app.job_queue.run_daily(
+        send_nudge,
+        time=datetime.time(NUDGE_HOUR, NUDGE_MINUTE, 0, tzinfo=tz),
     )
 
     print("Gym bot is running!")
